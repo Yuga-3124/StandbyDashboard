@@ -56,6 +56,11 @@ AIを使用して開発しています。
 
 ## サンプル画像
 
-![サンプル画像1(デフォルト)](Sample1.png)
-![サンプル画像2(ジャケット画像なし)](Sample2.png)
-![サンプル画像3(ニュースモード)](Sample3.png)
+### デフォルト
+<img src="assets/standby_main.png" width="700">
+
+### ジャケット画像なし
+<img src="assets/standby_no_art.png" width="700">
+
+### ニュースモード
+<img src="assets/standby_news_mode.png" width="700">

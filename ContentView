@@ -1,0 +1,561 @@
+import SwiftUI
+import MediaPlayer
+import Combine
+import AVFoundation
+
+// MARK: - 1. モデル & 管理
+struct NewsItem: Identifiable, Equatable {
+    let id = UUID()
+    let title: String
+}
+
+extension Array {
+    subscript(safe index: Index) -> Element? {
+        indices.contains(index) ? self[index] : nil
+    }
+}
+
+enum AppMode {
+    case news
+    case standby
+}
+
+@MainActor
+class IntegratedMusicManager: ObservableObject {
+    @Published var title: String = "Not Playing"
+    @Published var artist: String = "Select a song"
+    @Published var albumArt: UIImage? = nil
+    @Published var isPlaying: Bool = false
+    @Published var playbackTime: Double = 0
+    @Published var duration: Double = 1
+    @Published var invertedControls = false
+    
+    let player = MPMusicPlayerController.systemMusicPlayer
+    private var currentSongID: MPMediaEntityPersistentID?
+    private var songChangeCount = 0
+    private var cancellables = Set<AnyCancellable>()
+    var isDragging = false
+    
+    init() {
+        setupNotifications()
+        player.beginGeneratingPlaybackNotifications()
+        if let initialItem = player.nowPlayingItem {
+            currentSongID = initialItem.persistentID
+        }
+        updateNowPlayingInfo()
+    }
+    
+    private func setupNotifications() {
+        let center = NotificationCenter.default
+        center.publisher(for: .MPMusicPlayerControllerPlaybackStateDidChange)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.updatePlaybackState() }
+            .store(in: &cancellables)
+        
+        center.publisher(for: .MPMusicPlayerControllerNowPlayingItemDidChange)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.handleSongChange() }
+            .store(in: &cancellables)
+    }
+    
+    private func handleSongChange() {
+        let item = player.nowPlayingItem
+        let newID = item?.persistentID
+        guard let newID, currentSongID != newID else { return }
+        
+        currentSongID = newID
+        songChangeCount += 1
+        
+        if songChangeCount % 2 == 0 {
+            withAnimation(.easeInOut(duration: 0.8)) {
+                invertedControls.toggle()
+            }
+        }
+        updateNowPlayingInfo()
+    }
+    
+    func updateNowPlayingInfo() {
+        let item = player.nowPlayingItem
+        title = item?.title ?? "Not Playing"
+        artist = item?.artist ?? "Select a song"
+        duration = item?.playbackDuration ?? 1
+        albumArt = item?.artwork?.image(at: CGSize(width: 800, height: 800))
+        updatePlaybackState()
+    }
+    
+    func updatePlaybackTime() {
+        guard !isDragging else { return }
+        playbackTime = player.currentPlaybackTime
+    }
+    
+    func updatePlaybackState() {
+        isPlaying = player.playbackState == .playing
+        if !isDragging { playbackTime = player.currentPlaybackTime }
+    }
+    
+    func seek(to time: Double) {
+        player.currentPlaybackTime = time
+        playbackTime = time
+    }
+    
+    func playPause() {
+        isPlaying ? player.pause() : player.play()
+        updatePlaybackState()
+    }
+}
+
+@MainActor
+class NewsManager: ObservableObject {
+    @Published var newsList: [NewsItem] = []
+    func fetchNews() async {
+        guard let url = URL(string: "https://www3.nhk.or.jp/rss/news/cat0.xml") else { return }
+        do {
+            let (data, _) = try await URLSession.shared.data(from: url)
+            guard let xml = String(data: data, encoding: .utf8) else { return }
+            let titles = matches(for: "<item>.*?<title>(.*?)</title>", in: xml)
+            self.newsList = titles.compactMap {
+                let t = $0
+                    .replacingOccurrences(of: "<![CDATA[", with: "")
+                    .replacingOccurrences(of: "]]>", with: "")
+                    .trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
+                return t.isEmpty ? nil : NewsItem(title: t)
+            }
+        } catch { print(error) }
+    }
+    private func matches(for regex: String, in text: String) -> [String] {
+        let pattern = try? NSRegularExpression(pattern: regex, options: [.dotMatchesLineSeparators])
+        let results = pattern?.matches(in: text, range: NSRange(location: 0, length: (text as NSString).length)) ?? []
+        return results.map { (text as NSString).substring(with: $0.range(at: 1)) }
+    }
+}
+
+// MARK: - 2. UIコンポーネント
+struct MarqueeText: View {
+    let text: String
+    let fontSize: CGFloat
+    let color: Color
+    let speed: CGFloat
+    var isLooping: Bool = false
+    var onFinished: (() -> Void)? = nil
+    
+    @State private var offset: CGFloat = 0
+    @State private var contentWidth: CGFloat = 0
+    @State private var containerWidth: CGFloat = 0
+    @State private var opacity: Double = 1.0
+    @State private var animationTask: Task<Void, Never>? = nil
+    
+    var body: some View {
+        GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                Text(text)
+                    .font(.system(size: fontSize, weight: .bold, design: .rounded))
+                    .foregroundColor(color)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .background(GeometryReader { tGeo in
+                        Color.clear.onAppear { contentWidth = tGeo.size.width }
+                    })
+                    .opacity(opacity)
+                    .offset(x: offset)
+            }
+            .onAppear { containerWidth = geo.size.width; startAnimation() }
+            .onChange(of: text) { _, _ in startAnimation() }
+        }
+        .frame(height: fontSize + 10)
+        .clipped()
+    }
+    
+    private func startAnimation() {
+        animationTask?.cancel()
+        offset = 0
+        opacity = 1.0
+        animationTask = Task {
+            try? await Task.sleep(nanoseconds: 800_000_000)
+            if contentWidth <= containerWidth && contentWidth > 0 {
+                if !isLooping {
+                    try? await Task.sleep(nanoseconds: 8_000_000_000)
+                    withAnimation(.easeInOut(duration: 0.8)) { opacity = 0 }
+                    try? await Task.sleep(nanoseconds: 800_000_000)
+                    onFinished?()
+                }
+                return
+            }
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                let moveDistance = contentWidth - containerWidth + 50
+                let dur = Double(moveDistance / speed)
+                withAnimation(.linear(duration: dur)) { offset = -moveDistance }
+                try? await Task.sleep(nanoseconds: UInt64(dur * 1_000_000_000))
+                withAnimation(.easeInOut(duration: 0.8)) { opacity = 0 }
+                try? await Task.sleep(nanoseconds: 800_000_000)
+                if isLooping {
+                    offset = 0
+                    withAnimation(.easeInOut(duration: 0.8)) { opacity = 1.0 }
+                } else {
+                    onFinished?()
+                    break
+                }
+            }
+        }
+    }
+}
+
+struct PlaybackSlider: UIViewRepresentable {
+    @Binding var value: Double
+    var bounds: ClosedRange<Double>
+    var darkMode: Bool
+    var onEditingChanged: (Bool) -> Void
+    
+    func makeUIView(context: Context) -> UISlider {
+        let slider = UISlider(frame: .zero)
+        slider.minimumValue = Float(bounds.lowerBound)
+        slider.maximumValue = Float(bounds.upperBound)
+        slider.addTarget(context.coordinator, action: #selector(Coordinator.valueChanged(_:)), for: .valueChanged)
+        slider.addTarget(context.coordinator, action: #selector(Coordinator.sliderTouchDown(_:)), for: .touchDown)
+        slider.addTarget(context.coordinator, action: #selector(Coordinator.sliderTouchUp(_:)), for: [.touchUpInside, .touchUpOutside])
+        updateSliderColors(slider)
+        return slider
+    }
+    
+    func updateUIView(_ uiView: UISlider, context: Context) {
+        if !uiView.isTracking { uiView.value = Float(value) }
+        updateSliderColors(uiView)
+    }
+    
+    private func updateSliderColors(_ slider: UISlider) {
+        slider.minimumTrackTintColor = darkMode ? .black : .white
+        slider.maximumTrackTintColor = darkMode ? UIColor.black.withAlphaComponent(0.2) : UIColor.white.withAlphaComponent(0.2)
+        slider.thumbTintColor = darkMode ? .black : .white
+    }
+    
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+    
+    class Coordinator: NSObject {
+        var parent: PlaybackSlider
+        init(_ parent: PlaybackSlider) { self.parent = parent }
+        @objc func valueChanged(_ sender: UISlider) { parent.value = Double(sender.value) }
+        @objc func sliderTouchDown(_ sender: UISlider) { parent.onEditingChanged(true) }
+        @objc func sliderTouchUp(_ sender: UISlider) { parent.onEditingChanged(false) }
+    }
+}
+
+struct VolumeSlider: UIViewRepresentable {
+    var darkMode: Bool
+    
+    func makeUIView(context: Context) -> MPVolumeView {
+        let volumeView = MPVolumeView(frame: .zero)
+        for subview in volumeView.subviews {
+            if let button = subview as? UIButton {
+                button.isHidden = true
+                button.frame = .zero
+            }
+        }
+        updateSliderColors(volumeView)
+        return volumeView
+    }
+    
+    func updateUIView(_ uiView: MPVolumeView, context: Context) { updateSliderColors(uiView) }
+    
+    private func updateSliderColors(_ view: MPVolumeView) {
+        if let slider = view.subviews.first(where: { $0 is UISlider }) as? UISlider {
+            slider.minimumTrackTintColor = darkMode ? .black : .white
+            slider.maximumTrackTintColor = darkMode ? UIColor.black.withAlphaComponent(0.2) : UIColor.white.withAlphaComponent(0.2)
+            slider.thumbTintColor = darkMode ? .black : .white
+        }
+    }
+}
+
+// MARK: - 3. メイン画面
+struct ContentView: View {
+    @StateObject private var newsManager = NewsManager()
+    @StateObject private var music = IntegratedMusicManager()
+    
+    @State private var appMode: AppMode = .standby
+    @State private var newsIndex = 0
+    @State private var currentTime = Date()
+    @State private var colorMode = 0
+    @State private var showAlbumArt = true
+    @State private var isFilling = false
+    
+    private let clockTimer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+    private let playbackTimer = Timer.publish(every: 0.25, on: .main, in: .common).autoconnect()
+    
+    var currentColors: (bg: Color, text: Color, bar: Color) {
+        switch colorMode {
+        case 0: return (.black, .white, .yellow)
+        case 1: return (.yellow, .black, .black.opacity(0.15))
+        case 2: return (.white, .black, .yellow)
+        case 3: return (Color(white: 0.12), .yellow, .white.opacity(0.15))
+        default: return (.black, .white, .yellow)
+        }
+    }
+    
+    var progress: CGFloat {
+        let calendar = Calendar.current
+        let components = calendar.dateComponents([.minute, .second], from: currentTime)
+        let totalSeconds = CGFloat((components.minute ?? 0) % 10 * 60 + (components.second ?? 0))
+        return totalSeconds / 600
+    }
+    
+    var body: some View {
+        GeometryReader { geo in
+            ZStack {
+                if appMode == .news {
+                    newsModeView(size: geo.size)
+                        .transition(.opacity)
+                } else {
+                    standbyModeView(size: geo.size)
+                        .transition(.opacity)
+                }
+                
+                // モード切り替えボタン
+                VStack {
+                    HStack {
+                        Spacer()
+                        Button(action: {
+                            withAnimation(.spring(response: 0.5, dampingFraction: 0.8)) {
+                                appMode = (appMode == .standby) ? .news : .standby
+                            }
+                        }) {
+                            Image(systemName: appMode == .standby ? "newspaper.fill" : "clock.badge.checkmark.fill")
+                                .font(.system(size: 16))
+                                .foregroundColor(.white.opacity(0.2))
+                                .padding(24)
+                        }
+                    }
+                    Spacer()
+                }
+            }
+            .frame(width: geo.size.width, height: geo.size.height)
+        }
+        .ignoresSafeArea()
+        .onAppear { Task { await newsManager.fetchNews() } }
+        .onReceive(clockTimer) { input in
+            currentTime = input
+            let minute = Calendar.current.component(.minute, from: input)
+            let second = Calendar.current.component(.second, from: input)
+            
+            if minute % 10 == 0 && second == 0 {
+                withAnimation(.easeIn(duration: 0.2)) { isFilling = true }
+                colorMode = (colorMode + 1) % 4
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                    withAnimation(.easeOut(duration: 0.8)) { isFilling = false }
+                }
+            }
+        }
+        .onReceive(playbackTimer) { _ in
+            music.updatePlaybackTime()
+        }
+    }
+}
+
+// MARK: - モード別ビューの実装
+extension ContentView {
+    
+    func newsModeView(size: CGSize) -> some View {
+        ZStack {
+            // 背景レイヤー
+            ZStack {
+                Color.black
+                if let art = music.albumArt {
+                    Image(uiImage: art)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .blur(radius: 80)
+                        .opacity(0.5)
+                }
+            }
+            .frame(width: size.width, height: size.height)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                // 背景部分のタップでのみ、ちゃんとスタンドバイに戻る
+                withAnimation(.spring(response: 0.5, dampingFraction: 0.8)) { appMode = .standby }
+            }
+            
+            // コンテンツレイヤー
+            ZStack(alignment: .center) {
+                HStack(alignment: .center, spacing: 50) {
+                    // 左側：アートワーク
+                    ZStack {
+                        if let art = music.albumArt {
+                            Image(uiImage: art)
+                                .resizable()
+                                .aspectRatio(contentMode: .fit)
+                                .cornerRadius(24)
+                                .shadow(radius: 20)
+                                .scaleEffect(music.isPlaying ? 1.0 : 0.94)
+                        } else {
+                            RoundedRectangle(cornerRadius: 24)
+                                .fill(Color.white.opacity(0.1))
+                        }
+                    }
+                    .frame(width: size.width * 0.4, height: size.width * 0.4)
+                    .animation(.spring(), value: music.isPlaying)
+                    
+                    // 右側：操作パネル
+                    VStack(alignment: .leading, spacing: 18) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(currentTime.formatted(.dateTime.weekday(.wide).month().day()))
+                                .font(.subheadline).bold()
+                                .foregroundColor(.white.opacity(0.4))
+                                .textCase(.uppercase)
+                            Text(currentTime.formatted(.dateTime.hour().minute()))
+                                .font(.system(size: 72, weight: .black, design: .rounded))
+                                .foregroundColor(.white)
+                        }
+                        
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("NHK NEWS")
+                                .font(.caption).bold()
+                                .foregroundColor(.orange)
+                            if let item = newsManager.newsList[safe: newsIndex] {
+                                MarqueeText(text: item.title, fontSize: 18, color: .white, speed: 35, isLooping: false) {
+                                    withAnimation { newsIndex = (newsIndex + 1) % newsManager.newsList.count }
+                                }.id("n-\(newsIndex)")
+                            }
+                        }
+                        .padding(12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color.white.opacity(0.08))
+                        .cornerRadius(14)
+                        
+                        VStack(alignment: .leading, spacing: 2) {
+                            MarqueeText(text: music.title, fontSize: 32, color: .white, speed: 30, isLooping: true).id("s-\(music.title)")
+                            Text(music.artist).font(.headline).foregroundColor(.white.opacity(0.5))
+                        }
+                        
+                        PlaybackSlider(value: $music.playbackTime, bounds: 0...(music.duration > 0 ? music.duration : 1), darkMode: false, onEditingChanged: { d in
+                            music.isDragging = d
+                            if !d { music.seek(to: music.playbackTime) }
+                        }).frame(height: 20)
+                        
+                        HStack {
+                            Button(action: { music.player.skipToPreviousItem() }) { Image(systemName: "backward.fill") }
+                            Spacer()
+                            Button(action: { music.playPause() }) {
+                                ZStack { Circle().fill(Color.white).frame(width: 60, height: 60); Image(systemName: music.isPlaying ? "pause.fill" : "play.fill").foregroundColor(.black).font(.title3) }
+                            }
+                            Spacer()
+                            Button(action: { music.player.skipToNextItem() }) { Image(systemName: "forward.fill") }
+                        }.font(.title2).foregroundColor(.white).padding(.horizontal, 20)
+                        
+                        HStack(spacing: 15) {
+                            Image(systemName: "speaker.fill").font(.system(size: 11)).foregroundColor(.white.opacity(0.4))
+                            VolumeSlider(darkMode: false).frame(height: 30)
+                            Image(systemName: "speaker.wave.3.fill").font(.system(size: 11)).foregroundColor(.white.opacity(0.4))
+                        }
+                    }
+                    .frame(width: size.width * 0.44)
+                }
+                .padding(.horizontal, 45)
+                // 🛠️ 【修正】ここから下のコンテンツ領域内では、背後の背景タップジェスチャーにイベントを通さない防波堤を設置
+                .contentShape(Rectangle())
+                .onTapGesture { /* 何もしない（タップイベントをここで吸収して止める） */ }
+                
+            }
+            .frame(width: size.width, height: size.height, alignment: .center)
+        }
+    }
+    
+    func standbyModeView(size: CGSize) -> some View {
+        HStack(spacing: 0) {
+            ZStack {
+                if let art = music.albumArt {
+                    Image(uiImage: art).resizable().aspectRatio(contentMode: .fill).frame(width: size.width * 0.5).scaleEffect(1.15).blur(radius: 35).brightness(-0.35)
+                } else { Color.black }
+                
+                ZStack(alignment: .center) {
+                    VStack(spacing: 22) {
+                        ZStack {
+                            if let art = music.albumArt {
+                                Image(uiImage: art).resizable().aspectRatio(contentMode: .fit).frame(width: size.width * 0.28).cornerRadius(22).shadow(radius: 18).opacity(showAlbumArt ? 1 : 0)
+                            }
+                            Color.white.opacity(0.001).frame(width: size.width * 0.28, height: size.width * 0.28)
+                                .onTapGesture { withAnimation(.spring(response: 0.45, dampingFraction: 0.8)) { showAlbumArt.toggle() } }
+                        }.frame(height: size.width * 0.28)
+                        
+                        VStack(spacing: 4) {
+                            Text(music.title).font(.system(size: 28, weight: .black)).foregroundColor(.white)
+                            Text(music.artist).font(.system(size: 18, weight: .medium)).foregroundColor(.white.opacity(0.72))
+                        }.lineLimit(1).padding(.horizontal, 20)
+                        
+                        standbyControlCard(width: size.width * 0.4)
+                    }
+                }
+                .frame(width: size.width * 0.5, height: size.height, alignment: .center)
+            }
+            .frame(width: size.width * 0.5)
+            .clipped()
+            
+            standbyClockPanel(width: size.width * 0.5, height: size.height)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    withAnimation(.spring(response: 0.5, dampingFraction: 0.8)) { appMode = .news }
+                }
+        }
+        .frame(width: size.width, height: size.height)
+    }
+    
+    func standbyControlCard(width: CGFloat) -> some View {
+        let controlColor: Color = music.invertedControls ? .black : .white
+        let secondaryColor: Color = music.invertedControls ? .black.opacity(0.65) : .white.opacity(0.65)
+        let bgColor: Color = music.invertedControls ? .white : .black
+        
+        return VStack(spacing: 26) {
+            VStack(spacing: 8) {
+                PlaybackSlider(value: $music.playbackTime, bounds: 0...(music.duration > 0 ? music.duration : 1), darkMode: music.invertedControls, onEditingChanged: { d in
+                    music.isDragging = d
+                    if !d { music.seek(to: music.playbackTime) }
+                }).frame(height: 30)
+                HStack {
+                    Text(formatTime(music.playbackTime)).monospacedDigit()
+                    Spacer()
+                    Text(formatTime(music.duration)).monospacedDigit()
+                }.font(.caption2).foregroundColor(secondaryColor)
+            }
+            
+            HStack(spacing: 50) {
+                Button(action: { music.player.skipToPreviousItem() }) { Image(systemName: "backward.fill") }
+                Button(action: { music.playPause() }) { Image(systemName: music.isPlaying ? "pause.fill" : "play.fill").font(.system(size: 56)) }
+                Button(action: { music.player.skipToNextItem() }) { Image(systemName: "forward.fill") }
+            }.font(.title).foregroundColor(controlColor)
+            
+            HStack(spacing: 15) {
+                Image(systemName: "speaker.fill").foregroundColor(controlColor)
+                VolumeSlider(darkMode: music.invertedControls).frame(height: 40)
+                Image(systemName: "speaker.wave.3.fill").foregroundColor(controlColor)
+            }
+        }
+        .padding(.horizontal, 28).padding(.vertical, 24).frame(width: width)
+        .background(RoundedRectangle(cornerRadius: 34).fill(bgColor.opacity(0.82)))
+        .background(RoundedRectangle(cornerRadius: 34).fill(.ultraThinMaterial))
+        .shadow(color: .black.opacity(0.15), radius: 18, y: 10)
+        .animation(.easeInOut(duration: 0.8), value: music.invertedControls)
+    }
+    
+    func standbyClockPanel(width: CGFloat, height: CGFloat) -> some View {
+        ZStack(alignment: .topLeading) {
+            currentColors.bg.animation(.easeInOut(duration: 1), value: colorMode)
+            
+            GeometryReader { geo in
+                Rectangle().fill(currentColors.bar).frame(width: geo.size.width * progress)
+                    .animation(.linear(duration: 1), value: progress)
+                if isFilling { Color.white.opacity(0.25).transition(.opacity) }
+            }
+            
+            VStack(alignment: .leading, spacing: 4) {
+                Spacer().frame(height: 28)
+                Text(currentTime, style: .date).font(.custom("AvenirNext-Bold", size: 34))
+                Text(currentTime, style: .time).font(.custom("AvenirNext-Heavy", size: 160)).italic().minimumScaleFactor(0.5).lineLimit(1)
+            }
+            .foregroundColor(currentColors.text).padding(.leading, 40)
+        }
+        .frame(width: width, height: height).clipped()
+    }
+    
+    func formatTime(_ s: Double) -> String {
+        let i = max(0, Int(s))
+        return String(format: "%d:%02d", i / 60, i % 60)
+    }
+}
+

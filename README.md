@@ -1,4 +1,4 @@
-# StandbyDashboard
+# StandbyDashboard 【Tidely】
 
 iPad向けのスタンバイ時計 + 音楽ダッシュボードアプリ
 
@@ -54,7 +54,7 @@ AIを使用して開発しています。
 
 ---
 
-## サンプル画像
+## サンプル
 
 ### デフォルト
 <img src="assets/standby_main.png" width="700">
@@ -64,3 +64,20 @@ AIを使用して開発しています。
 
 ### ニュースモード
 <img src="assets/standby_news_mode.png" width="700">
+
+### 動画
+## Demo Video
+
+Watch Tidely in action:
+
+https://github.com/xxxxx
+
+サンプル画像/動画で使用した曲
+
+【サンプル画像】
+Swag / Miyauchi
+
+【サンプル動画】
+Shalala / ピラフ星人
+ピラピー / ピラフ星人
+シークレットラブ / ピラフ星人

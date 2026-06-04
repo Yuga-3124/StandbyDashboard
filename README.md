@@ -78,6 +78,4 @@ https://github.com/xxxxx
 Swag / Miyauchi
 
 【サンプル動画】
-Shalala / ピラフ星人
-ピラピー / ピラフ星人
-シークレットラブ / ピラフ星人
+Shalala / ピラフ星人|ピラピー / ピラフ星人|シークレットラブ / ピラフ星人

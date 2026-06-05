@@ -66,11 +66,10 @@ AIを使用して開発しています。
 <img src="assets/standby_news_mode.png" width="700">
 
 ### 動画
-## Demo Video
+## デモ動画
 
-Watch Tidely in action:
-
-https://github.com/xxxxx
+Tidelyのデモ動画を見る:
+https://github.com/user-attachments/assets/0f4a3bb9-02fa-4c08-885d-8b705760c4ac
 
 サンプル画像/動画で使用した曲
 

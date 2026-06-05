@@ -1,6 +1,6 @@
-# StandbyDashboard 【Tidely】
+# 【Tidely】
+iPad向けスタンバイ時計 + 音楽ダッシュボード
 
-iPad向けのスタンバイ時計 + 音楽ダッシュボードアプリ
 
 ---
 
@@ -65,7 +65,6 @@ AIを使用して開発しています。
 ### ニュースモード
 <img src="assets/standby_news_mode.png" width="700">
 
-### 動画
 ## デモ動画
 
 Tidelyのデモ動画を見る:
@@ -77,4 +76,6 @@ https://github.com/user-attachments/assets/0f4a3bb9-02fa-4c08-885d-8b705760c4ac
 Swag / Miyauchi
 
 【サンプル動画】
-Shalala / ピラフ星人|ピラピー / ピラフ星人|シークレットラブ / ピラフ星人
+- Shalala / ピラフ星人
+- ピラピー / ピラフ星人
+- シークレットラブ / ピラフ星人

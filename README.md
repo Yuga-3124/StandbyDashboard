@@ -48,6 +48,12 @@ iPad向けスタンバイ時計 + 音楽ダッシュボード
 3. コードを貼り付ける
 4. 実行
 
+## Quick Start (English)
+1. Install **Swift Playgrounds** on your iPad.
+2. Create a new App project.
+3. Paste the code from `ContentView.swift`.
+4. Run and enjoy!
+
 ---
 
 ## 注意

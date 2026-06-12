@@ -1,6 +1,9 @@
 # Tidely
 iPad向けスタンバイ時計 + 音楽ダッシュボード
-
+![Platform: iPadOS](https://img.shields.io/badge/Platform-iPadOS%2017%2B-blue?style=flat-square&logo=apple)
+![Language: Swift](https://img.shields.io/badge/Language-Swift%205.9-orange?style=flat-square&logo=swift)
+![Environment: Swift Playgrounds](https://img.shields.io/badge/Environment-Swift%20Playgrounds-feather?style=flat-square&logo=swift)
+![License: MIT](https://img.shields.io/badge/License-MIT-green?style=flat-square)
 
 ---
 
